@@ -2,7 +2,7 @@
 
 #include <iostream>
 
-#define SERVERPORT 9000
+#define SERVERPORT 4000
 #define BUFSIZE    512
 
 #include <WS2tcpip.h>	// 최신 고성능 sock

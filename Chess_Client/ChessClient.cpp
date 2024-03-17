@@ -77,7 +77,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         print_error("Connect", WSAGetLastError());
         closesocket(server_s);
         WSACleanup();
-        return 1;
+    }
+    else
+    {
+        std::cout << "Connect Success with : " << SERVER_ADDR << std::endl;
     }
     //========================================================
 
@@ -199,8 +202,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     case WM_PAINT:
         {
-            int w = img.GetWidth();
-            int h = img.GetHeight();
+	        int w = img.GetWidth();
+	        int h = img.GetHeight();
 
 	        GetClientRect(hWnd, &rect);
 
@@ -209,14 +212,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	        HBITMAP hBitmap = CreateCompatibleBitmap(hdc, rect.right, rect.bottom); // 비트맵 생성
 	        HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemdc, hBitmap); // 비트맵 선택
 
-            //FillRect(hMemdc, &rect, (HBRUSH)(COLOR_WINDOW + 1));
             img.Draw(hMemdc, 0, 0, rect.right, rect.bottom, 0, 0, w, h); //--- 메모리 DC에 배경 그리기
             imgSprite.Draw(hMemdc, coord.x, coord.y, 100, 100, 0, 0, imgSprite.GetWidth(), imgSprite.GetHeight());
     		BitBlt(hdc, 0, 0, rect.right, rect.bottom, hMemdc, 0, 0, SRCCOPY); // 고속복사 hMemdc->hdc
 
 	        SelectObject(hMemdc, hOldBitmap); // 기존 비트맵 선택
+
             DeleteDC(hMemdc); // 메모리 dc 해제
             DeleteDC(hdc); // 화면 dc 해제
+            DeleteObject(hBitmap);
+            DeleteObject(hOldBitmap);
         }
         break;
 
@@ -235,7 +240,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 print_error("WSASend", WSAGetLastError());
             }
-
 
             char recvBuffer[BUFSIZE];
             wsabuf[0].buf = recvBuffer;

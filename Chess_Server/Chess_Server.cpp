@@ -1,6 +1,6 @@
 #include "stdafx.h"
 
-constexpr short PORT = 9000;
+constexpr short PORT = 4000;
 constexpr int BUFSIZE = 256;
 
 
@@ -62,6 +62,8 @@ int main()
 		if (0 != res)
 		{
 			print_error("WSARecv", WSAGetLastError());
+			closesocket(server_s);
+			WSACleanup();
 		}
 
 		CHAR keyInput = static_cast<CHAR>(*wsabuf[0].buf);
@@ -87,8 +89,11 @@ int main()
 		}
 		std::cout << std::endl;
 
-		coord.x = max(0, min(xPos, rect.right - 100));
-		coord.y = max(0, min(yPos, rect.bottom - 100));
+		xPos = max(0, min(xPos, rect.right - 100));
+		yPos = max(0, min(yPos, rect.bottom - 100));
+
+		coord.x = xPos;
+		coord.y = yPos;
 
 		char buffer[sizeof(Coordinate)];
 		memcpy(buffer, &coord, sizeof(Coordinate));
@@ -101,6 +106,8 @@ int main()
 		if (0 != res)
 		{
 			print_error("WSASend", WSAGetLastError());
+			closesocket(server_s);
+			WSACleanup();
 		}
 		std::cout << "Send Coordiates X, Y : " << coord.x << ", "<< coord.y << std::endl;
 	}
