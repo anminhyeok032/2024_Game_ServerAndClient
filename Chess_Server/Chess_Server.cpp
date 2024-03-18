@@ -11,7 +11,6 @@ int main()
 	int res;
 	Coordinate coord{0,0};
 
-	// TODO 윈도우 창 크기 맞춰서 자동 rect 크기 조정되게 하는 법 물어보기
 	static RECT rect {0, 0, 784, 741};
 
 	WSADATA WSAData;
@@ -63,6 +62,7 @@ int main()
 		{
 			print_error("WSARecv", WSAGetLastError());
 			closesocket(server_s);
+			closesocket(client_s);
 			WSACleanup();
 		}
 
@@ -107,6 +107,7 @@ int main()
 		{
 			print_error("WSASend", WSAGetLastError());
 			closesocket(server_s);
+			closesocket(client_s);
 			WSACleanup();
 		}
 		std::cout << "Send Coordiates X, Y : " << coord.x << ", "<< coord.y << std::endl;

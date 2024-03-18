@@ -226,36 +226,51 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_KEYDOWN:
-        {
+		{
+        CHAR keyInput;
+        DWORD recv_flag;
+        int ret;
+    		switch (wParam) {
+		    case VK_LEFT:
+		    case VK_RIGHT:
+		    case VK_UP:
+		    case VK_DOWN:
 
-            CHAR keyInput = static_cast<CHAR>(wParam);
-            WSABUF wsabuf[1];
-            wsabuf[0].buf = reinterpret_cast<CHAR*>(&keyInput);
-            wsabuf[0].len = sizeof(CHAR);
+		        keyInput = static_cast<CHAR>(wParam);
+		        WSABUF wsabuf[1];
+		        wsabuf[0].buf = reinterpret_cast<CHAR*>(&keyInput);
+		        wsabuf[0].len = sizeof(CHAR);
 
-            DWORD sent_size;
+		        DWORD sent_size;
 
-            int ret = WSASend(server_s, wsabuf, 1, &sent_size, 0, nullptr, nullptr);
-            if (ret == SOCKET_ERROR)
-            {
-                print_error("WSASend", WSAGetLastError());
-            }
+		        ret = WSASend(server_s, wsabuf, 1, &sent_size, 0, nullptr, nullptr);
+		        if (ret == SOCKET_ERROR)
+		        {
+		            print_error("WSASend", WSAGetLastError());
+		        }
 
-            char recvBuffer[BUFSIZE];
-            wsabuf[0].buf = recvBuffer;
-            wsabuf[0].len = BUFSIZE;
-            DWORD bytesReceived;
-            DWORD recv_flag = 0;
+		        char recvBuffer[BUFSIZE];
+		        wsabuf[0].buf = recvBuffer;
+		        wsabuf[0].len = BUFSIZE;
+		        DWORD bytesReceived;
+		        recv_flag = 0;
 
-            ret = WSARecv(server_s, wsabuf, 1, &bytesReceived, &recv_flag, nullptr, nullptr);
-            if (ret == SOCKET_ERROR)
-            {
-                print_error("WSARecv", WSAGetLastError());
-            }
+		        ret = WSARecv(server_s, wsabuf, 1, &bytesReceived, &recv_flag, nullptr, nullptr);
+		        if (ret == SOCKET_ERROR)
+		        {
+		            print_error("WSARecv", WSAGetLastError());
+		        }
 
-            memcpy(&coord, recvBuffer, sizeof(Coordinate));
-            printf("Received Coordinates from server: x = %d, y = %d\n", coord.x, coord.y);
-        }
+		        memcpy(&coord, recvBuffer, sizeof(Coordinate));
+		        std::cout << "서버로부터 전송받은 좌표 : x = " << coord.x << ", y = " << coord.y << std::endl;
+		        break;
+    		case VK_ESCAPE:
+                std::cout << "프로그램 종료" << std::endl;
+                closesocket(server_s);
+                WSACleanup();
+                exit(0);
+    		}
+		}
         break;
             
     case WM_DESTROY:
