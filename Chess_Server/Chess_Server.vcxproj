@@ -130,6 +130,8 @@
     <ClCompile Include="Chess_Server.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Exp_Over.h" />
+    <ClInclude Include="Session.h" />
     <ClInclude Include="stdafx.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

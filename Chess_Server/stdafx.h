@@ -2,7 +2,18 @@
 
 #include <iostream>
 #include <WS2tcpip.h>	// 최신 고성능 sock
+#include <unordered_map>
 #pragma comment (lib, "WS2_32.LIB")
+
+void CALLBACK send_callback(DWORD, DWORD, LPWSAOVERLAPPED, DWORD);
+void CALLBACK recv_callback(DWORD, DWORD, LPWSAOVERLAPPED, DWORD);
+
+// 오버랩 포인터와 아이디를 담은 unordered_map
+std::unordered_map<LPWSAOVERLAPPED, int> g_session_map;
+constexpr short PORT = 4000;
+constexpr int BUFSIZE = 256;
+
+static RECT rect {0, 0, 784, 741};
 
 struct Coordinate
 {
@@ -21,3 +32,5 @@ void print_error(const char* msg, int err_no)
 	while (true);
 	LocalFree(msg_buf);
 }
+
+
