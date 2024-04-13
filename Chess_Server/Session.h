@@ -3,6 +3,7 @@
 #include "Exp_Over.h"
 
 
+
 class SESSION {
 
 	char buf[BUFSIZE];
@@ -44,24 +45,16 @@ public:
 
 	void do_send(int s_id, char* mess, int recv_size)
 	{
+
 		auto b = new EXP_OVER(s_id, mess, recv_size);
 		int res = WSASend(client_s, b->wsabuf, 1, nullptr, 0, &b->over, send_callback);
-		if (0 != res)
+
+		/*if (0 != res)
 		{
 			print_error("WSASend", WSAGetLastError());
-		}
+		}*/
 	}
 
-	void print_Coord(DWORD recv_size)
-	{
-		int my_id = g_session_map[&over];
-		std::cout << "Client [ " << my_id << " ] Sent: ";
-		for (DWORD i = 0; i < recv_size; ++i)
-		{
-			std::cout << buf[i];
-		}
-		std::cout << std::endl;
-	}
 
 	void check_Coord()
 	{
@@ -93,10 +86,9 @@ public:
 		coord.x = xPos;
 		coord.y = yPos;
 
-		char buffer[sizeof(Coordinate)];
-		memcpy(buffer, &coord, sizeof(Coordinate));
+		memcpy(buf, &coord, sizeof(Coordinate));
 
-		wsabuf[0].buf = buffer;
+		wsabuf[0].buf = buf;
 		wsabuf[0].len = sizeof(Coordinate);
 
 		std::cout << "[" << my_id  << "]" << "Send Coordiates X, Y : " << coord.x << ", " << coord.y << std::endl;
@@ -104,9 +96,15 @@ public:
 
 	void broadcast(int m_size, std::unordered_map<int, SESSION> &g_players)
 	{
-		for (auto& p : g_players)
-			p.second.do_send(g_session_map[&over], wsabuf[0].buf, m_size);
-			
+		for (auto& p : g_players) {
+			p.second.do_send(g_session_map[&over], wsabuf[0].buf, wsabuf[0].len);
+		}
 	}
 
+	Coordinate GetCoord()
+	{
+		return coord;
+	}
 };
+
+

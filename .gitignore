@@ -6,6 +6,10 @@
 /Chess_Server/x64 
 /Chess_Server/Debug 
 /Chess_Server/Release 
+/TF_IOCP_SERVER/TF_GAME_CLIENT/.vs
+/TF_IOCP_SERVER/TF_GAME_CLIENT/x64
+/TF_IOCP_SERVER/TF_IOCP_SERVER/.vs
+/TF_IOCP_SERVER/TF_IOCP_SERVER/x64
 /x64
 *.exe 
 *.ilk 

@@ -10,6 +10,7 @@ void CALLBACK recv_callback(DWORD, DWORD, LPWSAOVERLAPPED, DWORD);
 
 // 오버랩 포인터와 아이디를 담은 unordered_map
 std::unordered_map<LPWSAOVERLAPPED, int> g_session_map;
+
 constexpr short PORT = 4000;
 constexpr int BUFSIZE = 256;
 
