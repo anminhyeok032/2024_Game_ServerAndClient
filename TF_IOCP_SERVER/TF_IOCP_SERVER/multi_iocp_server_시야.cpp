@@ -2,9 +2,7 @@
 #include <array>
 #include <WS2tcpip.h>
 #include <MSWSock.h>
-#include <thread>
 #include <vector>
-#include <mutex>
 #include <unordered_set>
 #include "protocol.h"
 
@@ -14,8 +12,22 @@ using namespace std;
 
 enum COMP_TYPE { OP_ACCEPT, OP_RECV, OP_SEND };
 
-constexpr int VIEW_RANGE = 5;	// 실제 클라이언트 시야보다 약간 작게
+void process_packet(int c_id, char* packet);
+void disconnect(int c_id);
+void recv_callback(LPWSAOVERLAPPED _recv_over);
 
+void print_error(const char* msg, int err_no)
+{
+	WCHAR* msg_buf;
+	FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+		NULL, err_no,
+		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+		reinterpret_cast<LPWSTR>(&msg_buf), 0, NULL);
+	std::cout << msg;
+	std::wcout << L" : 에러 : " << msg_buf;
+	while (true);
+	LocalFree(msg_buf);
+}
 
 class OVER_EXP {
 public:
@@ -40,20 +52,21 @@ public:
 	}
 };
 
+void CALLBACK recv_callback(DWORD err, DWORD num_bytes, LPWSAOVERLAPPED over, DWORD flags);
+void CALLBACK send_callback(DWORD err, DWORD num_bytes, LPWSAOVERLAPPED over, DWORD flags);
+
 enum S_STATE { ST_FREE, ST_ALLOC, ST_INGAME };
+
 class SESSION {
 	OVER_EXP _recv_over;
 
 public:
-	mutex _s_lock;
 	S_STATE _state;
+	bool _is_active;
 	int _id;
 	SOCKET _socket;
 	short	x, y;
 	char	_name[NAME_SIZE];
-	unordered_set<int> view_list;
-	mutex _vl_l;
-
 	int		_prev_remain;
 	int		_last_move_time;
 public:
@@ -64,25 +77,49 @@ public:
 		x = y = 0;
 		_name[0] = 0;
 		_state = ST_FREE;
+		_is_active = false;
 		_prev_remain = 0;
 	}
 
 	~SESSION() {}
 
-	void do_recv()
+	void do_recv(int key)
 	{
 		DWORD recv_flag = 0;
 		memset(&_recv_over._over, 0, sizeof(_recv_over._over));
 		_recv_over._wsabuf.len = BUF_SIZE - _prev_remain;
 		_recv_over._wsabuf.buf = _recv_over._send_buf + _prev_remain;
-		WSARecv(_socket, &_recv_over._wsabuf, 1, 0, &recv_flag,
-			&_recv_over._over, 0);
+		long long lnum = _id;
+		_recv_over._over.hEvent = reinterpret_cast<HANDLE>(lnum);
+
+		unsigned long noblock = 1;
+
+		DWORD recv_size;
+		int res = WSARecv(_socket, &_recv_over._wsabuf, 1, &recv_size, &recv_flag,
+			nullptr, nullptr);
+
+		if (0 == res)
+		{
+			//cout << "recv" << endl;
+			recv_callback(&_recv_over._over);
+		}
+
+
 	}
 
 	void do_send(void* packet)
 	{
 		OVER_EXP* sdata = new OVER_EXP{ reinterpret_cast<char*>(packet) };
-		WSASend(_socket, &sdata->_wsabuf, 1, 0, 0, &sdata->_over, 0);
+		long long lnum = _id;
+		sdata->_over.hEvent = reinterpret_cast<HANDLE>(lnum);
+		DWORD sent_size;
+		int res = WSASend(_socket, &sdata->_wsabuf, 1, &sent_size, 0, nullptr, nullptr);
+		if (0 != res)
+		{
+			//print_error("send", WSAGetLastError());
+			// Callback sendcallback
+			disconnect(static_cast<int>(_id));
+		}
 	}
 	void send_login_info_packet()
 	{
@@ -98,9 +135,6 @@ public:
 	void send_add_player_packet(int c_id);
 	void send_remove_player_packet(int c_id)
 	{
-		_vl_l.lock();
-		view_list.erase(c_id);
-		_vl_l.unlock();
 		SC_REMOVE_PLAYER_PACKET p;
 		p.id = c_id;
 		p.size = sizeof(p);
@@ -109,21 +143,12 @@ public:
 	}
 };
 
+
 array<SESSION, MAX_USER> clients;
+vector<int> clients_num;
 
 SOCKET g_s_socket, g_c_socket;
 OVER_EXP g_a_over;
-
-bool can_see(int a, int b)
-{
-	int dist = (clients[a].x - clients[b].x) * (clients[a].x - clients[b].x) +
-		(clients[a].y - clients[b].y) * (clients[a].y - clients[b].y);
-	return dist <= VIEW_RANGE * VIEW_RANGE;
-
-	//if (abs(clients[a].x - client[b].x) > VIEW_RANGE) return false;
-	//return (abs(clients[a].x - client[b].x)) <= VIEW_RANGE;
-}
-
 
 void SESSION::send_move_packet(int c_id)
 {
@@ -139,10 +164,6 @@ void SESSION::send_move_packet(int c_id)
 
 void SESSION::send_add_player_packet(int c_id)
 {
-	_vl_l.lock();
-	view_list.insert(c_id);
-	_vl_l.unlock();
-
 	SC_ADD_PLAYER_PACKET add_packet;
 	add_packet.id = c_id;
 	strcpy_s(add_packet.name, clients[c_id]._name);
@@ -156,7 +177,6 @@ void SESSION::send_add_player_packet(int c_id)
 int get_new_client_id()
 {
 	for (int i = 0; i < MAX_USER; ++i) {
-		lock_guard <mutex> ll{ clients[i]._s_lock };
 		if (clients[i]._state == ST_FREE)
 			return i;
 	}
@@ -169,22 +189,12 @@ void process_packet(int c_id, char* packet)
 	case CS_LOGIN: {
 		CS_LOGIN_PACKET* p = reinterpret_cast<CS_LOGIN_PACKET*>(packet);
 		strcpy_s(clients[c_id]._name, p->name);
-		clients[c_id].x = rand() % W_WIDTH;
-		clients[c_id].y = rand() % W_HEIGHT;
-
 		clients[c_id].send_login_info_packet();
-		{
-			lock_guard<mutex> ll{ clients[c_id]._s_lock };
-			clients[c_id]._state = ST_INGAME;
-		}
-		for (auto& pl : clients) {
-			{
-				lock_guard<mutex> ll(pl._s_lock);
-				if (ST_INGAME != pl._state) continue;
-			}
-			if (pl._id == c_id) continue;
-			pl.send_add_player_packet(c_id);
-			clients[c_id].send_add_player_packet(pl._id);
+		for (auto& pl : clients_num) {
+			if (ST_INGAME != clients[pl]._state) continue;
+			if (clients[pl]._id == c_id) continue;
+			clients[pl].send_add_player_packet(c_id);
+			clients[c_id].send_add_player_packet(clients[pl]._id);
 		}
 		break;
 	}
@@ -202,53 +212,11 @@ void process_packet(int c_id, char* packet)
 		clients[c_id].x = x;
 		clients[c_id].y = y;
 
+		for (auto& cl : clients_num) {
+			if (clients[cl]._state != ST_INGAME) continue;
+			clients[cl].send_move_packet(c_id);
 
-		clients[c_id]._vl_l.lock();
-		unordered_set<int> old_viewlist = clients[c_id].view_list;
-		clients[c_id]._vl_l.unlock();
-		unordered_set<int> new_viewlist;
-
-		for (auto& pl : clients)
-		{
-			if (pl._state != ST_INGAME) {
-				continue;
-			}
-			if (false == can_see(c_id, pl._id))	continue;
-			if (pl._id == c_id)	continue;
-			new_viewlist.insert(pl._id);
 		}
-		clients[c_id].send_move_packet(c_id);
-
-		for (int p_id : new_viewlist)
-		{
-			// 새로 들어왔다.
-			if (0 == old_viewlist.count(p_id))
-			{
-				clients[c_id].send_add_player_packet(p_id);
-				clients[p_id].send_add_player_packet(c_id);
-			}
-			else
-			{
-				clients[p_id].send_move_packet(c_id);
-			}
-		}
-
-		for (int p_id : old_viewlist)
-		{
-			if (0 == new_viewlist.count(p_id))
-			{
-				clients[c_id].send_remove_player_packet(p_id);
-				clients[p_id].send_remove_player_packet(c_id);
-			}
-		}
-
-		/*for (auto& cl : clients) {
-			if (cl._state != ST_INGAME) continue;
-			if (true == can_see(cl._id, c_id)) {
-				cl.send_move_packet(c_id);
-			}
-
-		}*/
 	}
 	}
 }
@@ -256,124 +224,99 @@ void process_packet(int c_id, char* packet)
 void disconnect(int c_id)
 {
 	for (auto& pl : clients) {
-		{
-			lock_guard<mutex> ll(pl._s_lock);
-			if (ST_INGAME != pl._state) continue;
-		}
+		if (ST_INGAME != pl._state) continue;
 		if (pl._id == c_id) continue;
 		pl.send_remove_player_packet(c_id);
 	}
 	closesocket(clients[c_id]._socket);
-
-	lock_guard<mutex> ll(clients[c_id]._s_lock);
 	clients[c_id]._state = ST_FREE;
 }
 
-void worker_thread(HANDLE h_iocp)
+
+
+void recv_callback(LPWSAOVERLAPPED _recv_over)
 {
-	while (true) {
-		DWORD num_bytes;
-		ULONG_PTR key;
-		WSAOVERLAPPED* over = nullptr;
-		BOOL ret = GetQueuedCompletionStatus(h_iocp, &num_bytes, &key, &over, INFINITE);
-		OVER_EXP* ex_over = reinterpret_cast<OVER_EXP*>(over);
-		if (FALSE == ret) {
-			if (ex_over->_comp_type == OP_ACCEPT) cout << "Accept Error";
-			else {
-				cout << "GQCS Error on client[" << key << "]\n";
-				disconnect(static_cast<int>(key));
-				if (ex_over->_comp_type == OP_SEND) delete ex_over;
-				continue;
-			}
-		}
+	OVER_EXP* ex_over = reinterpret_cast<OVER_EXP*>(_recv_over);
 
-		if ((0 == num_bytes) && ((ex_over->_comp_type == OP_RECV) || (ex_over->_comp_type == OP_SEND))) {
-			disconnect(static_cast<int>(key));
-			if (ex_over->_comp_type == OP_SEND) delete ex_over;
-			continue;
+	long long key = reinterpret_cast<long long>(_recv_over->hEvent);
+	// TODO : 여기 값 이상한거 넘어와서 무한 루프 돌음
+	// 여기 들어오는 overlapped 매개변수가 문제인지 확인해보기
+	//int curr_id = static_cast<int>(ex_over->_wsabuf.buf[1]);
+	//if (key != curr_id) {
+	//	cout << curr_id << endl;
+	//	//curr_id = ex_over->_wsabuf.buf[1];
+	//}
+	int remain_data = ex_over->_wsabuf.buf[0] + clients[key]._prev_remain;
+	char* p = ex_over->_send_buf;
+	while (remain_data > 0) {
+		int packet_size = p[0];
+		if (packet_size <= remain_data) {
+			process_packet(static_cast<int>(key), p);
+			p = p + packet_size;
+			remain_data = remain_data - packet_size;
 		}
-
-		switch (ex_over->_comp_type) {
-		case OP_ACCEPT: {
-			int client_id = get_new_client_id();
-			if (client_id != -1) {
-				{
-					lock_guard<mutex> ll(clients[client_id]._s_lock);
-					clients[client_id]._state = ST_ALLOC;
-				}
-				clients[client_id].x = 0;
-				clients[client_id].y = 0;
-				clients[client_id]._id = client_id;
-				clients[client_id]._name[0] = 0;
-				clients[client_id]._prev_remain = 0;
-				clients[client_id]._socket = g_c_socket;
-				CreateIoCompletionPort(reinterpret_cast<HANDLE>(g_c_socket),
-					h_iocp, client_id, 0);
-				clients[client_id].do_recv();
-				g_c_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
-			}
-			else {
-				cout << "Max user exceeded.\n";
-			}
-			ZeroMemory(&g_a_over._over, sizeof(g_a_over._over));
-			int addr_size = sizeof(SOCKADDR_IN);
-			AcceptEx(g_s_socket, g_c_socket, g_a_over._send_buf, 0, addr_size + 16, addr_size + 16, 0, &g_a_over._over);
-			break;
-		}
-		case OP_RECV: {
-			int remain_data = num_bytes + clients[key]._prev_remain;
-			char* p = ex_over->_send_buf;
-			while (remain_data > 0) {
-				int packet_size = p[0];
-				if (packet_size <= remain_data) {
-					process_packet(static_cast<int>(key), p);
-					p = p + packet_size;
-					remain_data = remain_data - packet_size;
-				}
-				else break;
-			}
-			clients[key]._prev_remain = remain_data;
-			if (remain_data > 0) {
-				memcpy(ex_over->_send_buf, p, remain_data);
-			}
-			clients[key].do_recv();
-			break;
-		}
-		case OP_SEND:
-			delete ex_over;
-			break;
-		}
+		else break;
+	}
+	clients[key]._prev_remain = remain_data;
+	if (remain_data > 0) {
+		memcpy(ex_over->_send_buf, p, remain_data);
 	}
 }
 
+
+
 int main()
 {
-	HANDLE h_iocp;
-
+	std::wcout.imbue(std::locale("korean"));
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
-	g_s_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	SOCKET server = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, 0);
 	SOCKADDR_IN server_addr;
 	memset(&server_addr, 0, sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(PORT_NUM);
 	server_addr.sin_addr.S_un.S_addr = INADDR_ANY;
-	bind(g_s_socket, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
-	listen(g_s_socket, SOMAXCONN);
+	bind(server, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
+	listen(server, SOMAXCONN);
 	SOCKADDR_IN cl_addr;
 	int addr_size = sizeof(cl_addr);
-	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, 0);
-	CreateIoCompletionPort(reinterpret_cast<HANDLE>(g_s_socket), h_iocp, 9999, 0);
-	g_c_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
-	g_a_over._comp_type = OP_ACCEPT;
-	AcceptEx(g_s_socket, g_c_socket, g_a_over._send_buf, 0, addr_size + 16, addr_size + 16, 0, &g_a_over._over);
 
-	vector <thread> worker_threads;
-	int num_threads = std::thread::hardware_concurrency();
-	for (int i = 0; i < num_threads; ++i)
-		worker_threads.emplace_back(worker_thread, h_iocp);
-	for (auto& th : worker_threads)
-		th.join();
-	closesocket(g_s_socket);
+	unsigned long noblock = 1;
+	int nRet = ioctlsocket(server, FIONBIO, &noblock);
+
+	while (true) {
+
+		SOCKET client = WSAAccept(server, reinterpret_cast<sockaddr*>(&cl_addr), &addr_size, NULL, NULL);
+
+		if (client != INVALID_SOCKET)
+		{
+			unsigned long noblock = 1;
+			int nRet = ioctlsocket(client, FIONBIO, &noblock);
+
+			int client_id = get_new_client_id();
+			if (client_id != -1) {
+				clients[client_id]._state = ST_INGAME;
+				clients[client_id].x = 0;
+				clients[client_id].y = 0;
+				clients[client_id]._id = client_id;
+				clients[client_id]._name[0] = 0;
+				clients[client_id]._prev_remain = 0;
+				clients[client_id]._socket = client;
+				clients_num.push_back(client_id);
+				clients[client_id].do_recv(client_id);
+			}
+			else {
+				cout << "Max user exceeded.\n";
+			}
+		}
+		for (auto& cl : clients_num)
+		{
+			if (clients[cl]._state != ST_FREE)
+			{
+				clients[cl].do_recv(cl);
+			}
+		}
+	}
+	closesocket(server);
 	WSACleanup();
 }
